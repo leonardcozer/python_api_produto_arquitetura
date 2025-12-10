@@ -22,13 +22,22 @@ from internal.infra.logger.zap import LOGGER_MAIN, configure_logging
 from internal.modules.produto.routes import router as produto_router
 
 # Configura logging com suporte ao Loki
-configure_logging(
+loki_connected = configure_logging(
     log_level=settings.server.log_level,
     loki_url=settings.loki.url if settings.loki.enabled else None,
     loki_job=settings.loki.job if settings.loki.enabled else None,
     loki_enabled=settings.loki.enabled
 )
 logger = logging.getLogger(LOGGER_MAIN)
+
+# Mensagem informativa sobre Grafana/Loki
+if loki_connected:
+    logger.info("=" * 80)
+    logger.info("📊 GRAFANA + LOKI CONECTADO E ATIVO")
+    logger.info(f"   🔗 URL: {settings.loki.url}")
+    logger.info(f"   📋 JOB: {settings.loki.job}")
+    logger.info("   ✅ Todos os logs estão sendo enviados para o Grafana/Loki")
+    logger.info("=" * 80)
 
 
 @asynccontextmanager
@@ -39,6 +48,14 @@ async def lifespan(app: FastAPI):
     """
     # Inicialização (startup)
     logger.info("🚀 Iniciando aplicação...")
+    
+    # Garante que os loggers do uvicorn também estão configurados para o Loki
+    if loki_connected:
+        root_logger = logging.getLogger()
+        if hasattr(root_logger, '_ensure_uvicorn_loggers_configured'):
+            root_logger._ensure_uvicorn_loggers_configured()
+            logger.info("✅ Loggers do Uvicorn configurados para Grafana/Loki")
+    
     try:
         db.init()
         db.create_tables()
@@ -119,15 +136,26 @@ def main():
     logger.info(f"📚 Documentação em http://{settings.server.host}:{settings.server.port}/docs")
     logger.info(f"🔧 Ambiente: {settings.environment}")
     logger.info(f"📝 Nível de log: {settings.server.log_level}")
+    if loki_connected:
+        logger.info(f"📊 Grafana/Loki: CONECTADO - JOB: {settings.loki.job}")
+        # Garante que os loggers do uvicorn também estão configurados
+        root_logger = logging.getLogger()
+        if hasattr(root_logger, '_ensure_uvicorn_loggers_configured'):
+            root_logger._ensure_uvicorn_loggers_configured()
+    else:
+        logger.info("📊 Grafana/Loki: DESCONECTADO")
     logger.info("=" * 80)
     
     # Inicia o servidor Uvicorn
+    # Usa log_config=None para usar o logger já configurado
+    # Isso garante que todos os logs do uvicorn também vão para o Loki
     uvicorn.run(
         "cmd.api.main:app",
         host=settings.server.host,
         port=settings.server.port,
         reload=settings.server.reload,
         log_level=settings.server.log_level.lower(),
+        log_config=None,  # Usa o logger já configurado
     )
 
 
