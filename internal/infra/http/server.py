@@ -18,10 +18,4 @@ def create_server() -> FastAPI:
     return app
 
 
-def configure_logging(log_level: str = "INFO"):
-    """Configura o sistema de logging"""
-    logging.basicConfig(
-        level=getattr(logging, log_level.upper()),
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    )
-    logger.info(f"Logging configured with level: {log_level}")
+# configure_logging foi movido para internal.infra.logger.zap

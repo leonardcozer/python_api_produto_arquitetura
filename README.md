@@ -86,6 +86,12 @@ SERVER_HOST=0.0.0.0
 SERVER_PORT=8000
 ENVIRONMENT=development
 DEBUG=True
+LOG_LEVEL=INFO
+
+# Configuração do Loki (Grafana)
+LOKI_URL=http://172.30.0.45:3100
+LOKI_JOB=MONITORAMENTO_PRODUTO
+LOKI_ENABLED=True
 ```
 
 4. **Inicialize o banco de dados:**
@@ -117,6 +123,34 @@ Após iniciar a aplicação, acesse:
 - **Swagger UI**: http://localhost:8000/docs
 - **ReDoc**: http://localhost:8000/redoc
 - **OpenAPI JSON**: http://localhost:8000/openapi.json
+
+## 📊 Observabilidade com Grafana + Loki
+
+A aplicação está configurada para enviar logs automaticamente para o Loki, permitindo visualização e análise no Grafana.
+
+### Configuração
+
+Os logs são enviados automaticamente quando as seguintes variáveis de ambiente estão configuradas:
+
+- `LOKI_URL`: URL do servidor Loki (padrão: http://172.30.0.45:3100)
+- `LOKI_JOB`: Nome do job para identificação no Loki (padrão: MONITORAMENTO_PRODUTO)
+- `LOKI_ENABLED`: Habilita/desabilita o envio de logs (padrão: True)
+
+### Visualização no Grafana
+
+1. Acesse o Grafana na URL configurada
+2. Configure o Loki como fonte de dados (se ainda não estiver configurado)
+3. Use a query `{job="MONITORAMENTO_PRODUTO"}` para filtrar os logs da aplicação
+4. Crie painéis e alertas conforme necessário
+
+### Logs Disponíveis
+
+Todos os logs da aplicação são enviados ao Loki, incluindo:
+- Logs de inicialização e shutdown
+- Logs de requisições HTTP (via middleware)
+- Logs de operações de banco de dados
+- Logs de serviços e repositórios
+- Logs de erros e exceções
 
 ## 🔌 Endpoints
 
@@ -240,11 +274,12 @@ make clean     # Limpa arquivos temporários
 
 - ✅ Validação em múltiplas camadas
 - ✅ Tratamento de erros robusto
-- ✅ Logging detalhado
+- ✅ Logging detalhado com integração Loki/Grafana
 - ✅ Separação de responsabilidades
 - ✅ DTOs para transferência de dados
 - ✅ CORS configurável
 - ✅ Pool de conexões otimizado
+- ✅ Observabilidade com Grafana + Loki
 
 ## 📝 Exemplo de Uso Completo
 
@@ -286,6 +321,7 @@ curl -X DELETE http://localhost:8000/produtos/1
 - **psycopg2** 2.9.9 - Driver PostgreSQL
 - **Uvicorn** 0.24.0 - Servidor ASGI
 - **python-dotenv** 1.0.0 - Gerenciamento de env vars
+- **python-logging-loki** 0.3.2 - Integração com Loki para observabilidade
 
 ## 📄 Licença
 

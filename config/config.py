@@ -35,10 +35,17 @@ class ServerConfig(BaseSettings):
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
 
 
+class LokiConfig(BaseSettings):
+    url: str = os.getenv("LOKI_URL", "http://172.30.0.45:3100")
+    job: str = os.getenv("LOKI_JOB", "MONITORAMENTO_PRODUTO")
+    enabled: bool = os.getenv("LOKI_ENABLED", "True").lower() == "true"
+
+
 class Settings(BaseSettings):
     database: DatabaseConfig = DatabaseConfig()
     server: ServerConfig = ServerConfig()
     cors: CORSConfig = CORSConfig()
+    loki: LokiConfig = LokiConfig()
     environment: str = os.getenv("ENVIRONMENT", "development")
     debug: bool = os.getenv("DEBUG", "False").lower() == "true"
 

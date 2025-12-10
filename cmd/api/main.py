@@ -16,13 +16,18 @@ sys.path.insert(0, str(__file__).rsplit('/', 3)[0])
 
 from config.config import settings
 from internal.infra.database.banco_dados import db
-from internal.infra.http.server import create_server, configure_logging
+from internal.infra.http.server import create_server
 from internal.infra.http.middlewares import configure_middlewares, configure_cors
-from internal.infra.logger.zap import LOGGER_MAIN
+from internal.infra.logger.zap import LOGGER_MAIN, configure_logging
 from internal.modules.produto.routes import router as produto_router
 
-# Configura logging
-configure_logging(settings.server.log_level)
+# Configura logging com suporte ao Loki
+configure_logging(
+    log_level=settings.server.log_level,
+    loki_url=settings.loki.url if settings.loki.enabled else None,
+    loki_job=settings.loki.job if settings.loki.enabled else None,
+    loki_enabled=settings.loki.enabled
+)
 logger = logging.getLogger(LOGGER_MAIN)
 
 
