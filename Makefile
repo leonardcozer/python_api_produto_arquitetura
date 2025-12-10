@@ -11,6 +11,7 @@ help:
 	@echo "  make clean          - Limpa arquivos desnecessários"
 	@echo "  make docker-build   - Constrói a imagem Docker"
 	@echo "  make docker-run     - Executa a aplicação em um container Docker"
+	@echo "  make docker-rebuild - Reconstroi o container com dependências atualizadas"
 	@echo "  make db-init        - Inicializa o banco de dados"
 	@echo "  make db-clean       - Limpa o banco de dados"
 
@@ -55,6 +56,11 @@ docker-run:
 		-e DATABASE_NAME=produto_db \
 		-e ENVIRONMENT=production \
 		api-produto:latest
+
+docker-rebuild:
+	docker compose down
+	docker compose build --no-cache
+	docker compose up -d
 
 db-init:
 	python -c "from internal.infra.database.banco_dados import db; db.init(); db.create_tables(); print('✅ Banco de dados inicializado')"

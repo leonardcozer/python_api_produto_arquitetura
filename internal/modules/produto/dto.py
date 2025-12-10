@@ -12,7 +12,7 @@ class ProdutoCreateRequest(BaseModel):
     categoria: str = Field(..., min_length=1, max_length=100, description="Categoria do produto")
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "nome": "Notebook Dell",
                 "descricao": "Notebook de alta performance",
@@ -32,7 +32,7 @@ class ProdutoUpdateRequest(BaseModel):
     categoria: Optional[str] = Field(None, min_length=1, max_length=100)
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "nome": "Notebook Dell XPS",
                 "preco": 5499.99,
@@ -54,7 +54,7 @@ class ProdutoResponse(BaseModel):
 
     class Config:
         from_attributes = True
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "id": 1,
                 "nome": "Notebook Dell",
@@ -76,7 +76,7 @@ class ProdutoListResponse(BaseModel):
     items: list[ProdutoResponse]
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example": {
                 "total": 100,
                 "page": 1,
