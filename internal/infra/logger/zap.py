@@ -122,15 +122,25 @@ def configure_logging(
     if loki_enabled and loki_url and loki_job:
         try:
             # Garante que o Python encontre os pacotes instalados
-            # Adiciona os caminhos padrão do site-packages ao sys.path
-            site_packages_paths = [
+            # Usa site.getsitepackages() para encontrar os caminhos corretos
+            import site
+            site_packages_paths = site.getsitepackages()
+            
+            # Adiciona também caminhos padrão caso site.getsitepackages() não funcione
+            default_paths = [
                 '/usr/local/lib/python3.11/site-packages',
+                '/usr/local/lib/python3/site-packages',
                 '/usr/lib/python3.11/site-packages',
+                '/usr/lib/python3/site-packages',
             ]
-            for path in site_packages_paths:
+            
+            # Adiciona todos os caminhos válidos ao sys.path
+            all_paths = list(site_packages_paths) + default_paths
+            for path in all_paths:
                 if os.path.exists(path) and path not in sys.path:
                     sys.path.insert(0, path)
             
+            # Tenta importar o módulo
             from python_logging_loki import LokiHandler
             
             # Cria o handler do Loki
@@ -228,10 +238,14 @@ def configure_logging(
             
         except ImportError as e:
             logger = logging.getLogger(__name__)
+            # Tenta encontrar onde o pacote deveria estar
+            import site
+            site_packages = site.getsitepackages()
             logger.warning(
                 f"⚠️ python-logging-loki não pode ser importado. "
                 f"Erro: {str(e)} | "
-                f"Python path: {sys.path[:3]} | "
+                f"Python path: {sys.path[:5]} | "
+                f"Site packages: {site_packages} | "
                 f"Tente: pip install python-logging-loki==0.3.1"
             )
             # Tenta verificar se o pacote está instalado
@@ -244,7 +258,40 @@ def configure_logging(
                     timeout=5
                 )
                 if "python-logging-loki" in result.stdout:
-                    logger.warning("   ℹ️ O pacote está listado no pip, mas não pode ser importado. Pode ser um problema de path.")
+                    logger.warning("   ℹ️ O pacote está listado no pip, mas não pode ser importado.")
+                    logger.warning(f"   💡 Tentando adicionar site-packages manualmente...")
+                    # Tenta adicionar os caminhos do site-packages novamente
+                    for sp_path in site_packages:
+                        if os.path.exists(sp_path) and sp_path not in sys.path:
+                            sys.path.insert(0, sp_path)
+                    # Tenta importar novamente
+                    try:
+                        from python_logging_loki import LokiHandler
+                        logger.info("   ✅ Módulo encontrado após adicionar site-packages!")
+                        # Se chegou aqui, o módulo foi encontrado, então recria o handler
+                        loki_handler_base = LokiHandler(
+                            url=f"{loki_url}/loki/api/v1/push",
+                            tags={"job": loki_job, "application": "produto-api"},
+                            version="1"
+                        )
+                        loki_handler_base.setLevel(level)
+                        loki_formatter = logging.Formatter(
+                            '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                            datefmt=date_format
+                        )
+                        loki_handler_base.setFormatter(loki_formatter)
+                        loki_handler = LokiHandlerWithLogging(
+                            loki_handler=loki_handler_base,
+                            loki_url=loki_url,
+                            loki_job=loki_job
+                        )
+                        loki_handler.setLevel(level)
+                        loki_handler.setFormatter(loki_formatter)
+                        root_logger.addHandler(loki_handler)
+                        loki_connected = True
+                        logger.info("   ✅ Loki handler configurado com sucesso!")
+                    except ImportError:
+                        logger.warning("   ❌ Ainda não foi possível importar o módulo.")
             except Exception:
                 pass
         except Exception as e:
