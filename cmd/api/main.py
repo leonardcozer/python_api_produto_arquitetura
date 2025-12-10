@@ -19,6 +19,7 @@ from internal.infra.database.banco_dados import db
 from internal.infra.http.server import create_server
 from internal.infra.http.middlewares import configure_middlewares, configure_cors
 from internal.infra.logger.zap import LOGGER_MAIN, configure_logging
+from internal.infra.metrics.prometheus import setup_metrics, get_metrics, get_metrics_content_type
 from internal.modules.produto.routes import router as produto_router
 
 # Configura logging com suporte ao Loki
@@ -87,8 +88,27 @@ def create_app() -> FastAPI:
     # Configura middlewares
     configure_middlewares(app)
     
+    # Configura métricas do Prometheus
+    setup_metrics(version="1.0.0", environment=settings.environment)
+    logger.info("✅ Métricas do Prometheus configuradas")
+    
     # Registra as rotas
     app.include_router(produto_router)
+    
+    # Rota de métricas do Prometheus
+    @app.get(
+        "/metrics",
+        tags=["Metrics"],
+        summary="Prometheus Metrics",
+        description="Endpoint para métricas do Prometheus"
+    )
+    async def metrics():
+        """Endpoint para expor métricas do Prometheus"""
+        from fastapi.responses import Response
+        return Response(
+            content=get_metrics(),
+            media_type=get_metrics_content_type()
+        )
     
     # Rota de health check
     @app.get(
@@ -123,6 +143,7 @@ def create_app() -> FastAPI:
     
     logger.info("✅ Aplicação configurada com sucesso")
     logger.info(f"📊 Documentação disponível em: http://{settings.server.host}:{settings.server.port}/docs")
+    logger.info(f"📈 Métricas Prometheus disponíveis em: http://{settings.server.host}:{settings.server.port}/metrics")
     
     return app
 
@@ -136,6 +157,7 @@ def main():
     logger.info("=" * 80)
     logger.info(f"🌐 Iniciando servidor em http://{settings.server.host}:{settings.server.port}")
     logger.info(f"📚 Documentação em http://{settings.server.host}:{settings.server.port}/docs")
+    logger.info(f"📈 Métricas Prometheus em http://{settings.server.host}:{settings.server.port}/metrics")
     logger.info(f"🔧 Ambiente: {settings.environment}")
     logger.info(f"📝 Nível de log: {settings.server.log_level}")
     if loki_connected:

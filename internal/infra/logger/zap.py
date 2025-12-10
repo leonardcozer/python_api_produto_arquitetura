@@ -112,6 +112,16 @@ class LokiHandler(logging.Handler):
     
     def _process_batch(self):
         """Processa batch de logs em background"""
+        # Importa métricas do Prometheus
+        try:
+            from internal.infra.metrics.prometheus import (
+                loki_logs_sent_total,
+                loki_logs_failed_total,
+            )
+            METRICS_AVAILABLE = True
+        except ImportError:
+            METRICS_AVAILABLE = False
+        
         while True:
             try:
                 # Coleta logs do queue
@@ -130,6 +140,18 @@ class LokiHandler(logging.Handler):
                 if entries:
                     if self._send_to_loki(entries):
                         self.logs_sent += len(entries)
+                        
+                        # Coleta métricas do Prometheus
+                        if METRICS_AVAILABLE:
+                            for entry in entries:
+                                # Extrai level e logger do entry (armazenados no emit)
+                                level = entry.get('_record_level', 'unknown')
+                                logger_name = entry.get('_record_logger', 'unknown')
+                                loki_logs_sent_total.labels(
+                                    level=level,
+                                    logger=logger_name
+                                ).inc()
+                        
                         if self.logs_sent % 10 == 0 or len(entries) > 0:
                             self.sender_logger.info(
                                 f"📤 POST para Grafana/Loki | "
@@ -141,6 +163,10 @@ class LokiHandler(logging.Handler):
                     else:
                         self.logs_failed += len(entries)
                         
+                        # Coleta métricas de falhas
+                        if METRICS_AVAILABLE:
+                            loki_logs_failed_total.inc(len(entries))
+                        
             except Exception as e:
                 self.sender_logger.error(f"❌ Erro no processamento de batch: {str(e)}")
                 time.sleep(1)
@@ -150,6 +176,9 @@ class LokiHandler(logging.Handler):
         try:
             # Formata o log para o formato do Loki
             entry = self._format_log_entry(record)
+            # Armazena informações do record no entry para uso nas métricas
+            entry['_record_level'] = record.levelname.lower()
+            entry['_record_logger'] = record.name
             # Adiciona ao queue (não bloqueia)
             self.log_queue.put_nowait(entry)
         except Exception as e:
