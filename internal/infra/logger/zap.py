@@ -217,8 +217,6 @@ def configure_logging(
             
         except ImportError as e:
             logger = logging.getLogger(__name__)
-            import sys
-            import os
             logger.warning(
                 f"⚠️ python-logging-loki não pode ser importado. "
                 f"Erro: {str(e)} | "
