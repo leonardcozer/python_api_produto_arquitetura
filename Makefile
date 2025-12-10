@@ -62,6 +62,16 @@ docker-rebuild:
 	docker compose build --no-cache
 	docker compose up -d
 
+docker-rebuild-nocache:
+	@echo "🛑 Parando containers..."
+	docker compose down
+	@echo "🔨 Reconstruindo SEM CACHE..."
+	docker compose build --no-cache
+	@echo "🚀 Iniciando containers..."
+	docker compose up -d
+	@echo "✅ Pronto! Verificando logs..."
+	docker compose logs -f web
+
 db-init:
 	python -c "from internal.infra.database.banco_dados import db; db.init(); db.create_tables(); print('✅ Banco de dados inicializado')"
 
