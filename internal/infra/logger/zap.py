@@ -1,7 +1,12 @@
+import json
 import logging
 import os
 import sys
+import time
+from datetime import datetime
 from typing import Optional
+from queue import Queue
+from threading import Thread
 
 # Nomes dos loggers
 LOGGER_MAIN = "main"
@@ -16,67 +21,140 @@ def get_logger(name: str) -> logging.Logger:
     return logging.getLogger(name)
 
 
-class LokiHandlerWithLogging(logging.Handler):
+class LokiHandler(logging.Handler):
     """
-    Handler customizado do Loki que adiciona logging sobre o envio de logs
+    Handler customizado que envia logs diretamente para o Grafana/Loki via POST
     """
-    def __init__(self, loki_handler, loki_url: str, loki_job: str):
+    def __init__(self, loki_url: str, loki_job: str, batch_size: int = 10, timeout: int = 5):
         super().__init__()
-        self.loki_handler = loki_handler
-        self.loki_url = loki_url
+        self.loki_url = loki_url.rstrip('/')
+        self.loki_endpoint = f"{self.loki_url}/loki/api/v1/push"
         self.loki_job = loki_job
+        self.batch_size = batch_size
+        self.timeout = timeout
         self.logs_sent = 0
         self.logs_failed = 0
-        self.logger = logging.getLogger("loki_sender")
-        # Configura o logger para não criar loop infinito
-        self.logger.propagate = False
+        self.log_queue = Queue()
+        self.batch = []
+        self.last_send = time.time()
+        
+        # Logger para informações sobre envio (sem loop infinito)
+        self.sender_logger = logging.getLogger("loki_sender")
+        self.sender_logger.propagate = False
         console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setFormatter(logging.Formatter('%(message)s'))
-        self.logger.addHandler(console_handler)
-        self.logger.setLevel(logging.DEBUG)
+        self.sender_logger.addHandler(console_handler)
+        self.sender_logger.setLevel(logging.INFO)
         
-    def emit(self, record):
-        """Envia o log para o Loki e registra informações sobre o envio"""
+        # Thread para processar batch de logs
+        self.worker_thread = Thread(target=self._process_batch, daemon=True)
+        self.worker_thread.start()
+        
+    def _format_log_entry(self, record: logging.LogRecord) -> dict:
+        """Formata um log record para o formato do Loki"""
+        # Formata a mensagem
         try:
-            # Envia o log para o Loki usando o handler original
-            self.loki_handler.emit(record)
+            message = self.format(record)
+        except Exception:
+            message = record.getMessage()
+        
+        # Converte timestamp para nanosegundos (Loki requer nanosegundos)
+        timestamp_ns = int(record.created * 1_000_000_000)
+        
+        # Tags/Labels para o Loki
+        labels = {
+            "job": self.loki_job,
+            "application": "produto-api",
+            "level": record.levelname.lower(),
+            "logger": record.name,
+        }
+        
+        return {
+            "stream": labels,
+            "values": [[str(timestamp_ns), message]]
+        }
+    
+    def _send_to_loki(self, entries: list) -> bool:
+        """Envia um batch de logs para o Loki"""
+        if not entries:
+            return True
+        
+        try:
+            import requests
             
-            # Incrementa contador
-            self.logs_sent += 1
+            # Formata o payload no formato esperado pelo Loki
+            payload = {
+                "streams": entries
+            }
             
-            # Log informativo sobre o envio (a cada 10 logs, no primeiro log, ou em nível DEBUG)
-            if self.logs_sent == 1 or self.logs_sent % 10 == 0 or record.levelno == logging.DEBUG:
-                endpoint = f"{self.loki_url}/loki/api/v1/push"
-                self.logger.info(
-                    f"📤 POST para Grafana/Loki | "
-                    f"Endpoint: {endpoint} | "
-                    f"JOB: {self.loki_job} | "
-                    f"Total enviados: {self.logs_sent} | "
-                    f"Level: {record.levelname} | "
-                    f"Logger: {record.name} | "
-                    f"Mensagem: {record.getMessage()[:50]}..."
-                )
-        except Exception as e:
-            # Log de erro se falhar o envio
-            self.logs_failed += 1
-            endpoint = f"{self.loki_url}/loki/api/v1/push"
-            self.logger.error(
-                f"❌ Erro no POST para Grafana/Loki | "
-                f"Endpoint: {endpoint} | "
-                f"JOB: {self.loki_job} | "
-                f"Erro: {str(e)} | "
-                f"Total falhas: {self.logs_failed}"
+            # Faz o POST para o Loki
+            response = requests.post(
+                self.loki_endpoint,
+                json=payload,
+                headers={"Content-Type": "application/json"},
+                timeout=self.timeout
             )
+            
+            if response.status_code in [200, 204]:
+                return True
+            else:
+                self.sender_logger.warning(
+                    f"⚠️ Loki retornou status {response.status_code}: {response.text[:100]}"
+                )
+                return False
+                
+        except ImportError:
+            self.sender_logger.error("❌ Biblioteca 'requests' não está instalada")
+            return False
+        except Exception as e:
+            self.sender_logger.error(f"❌ Erro ao enviar para Loki: {str(e)}")
+            return False
     
-    def setLevel(self, level):
-        """Define o nível do handler"""
-        super().setLevel(level)
-        self.loki_handler.setLevel(level)
+    def _process_batch(self):
+        """Processa batch de logs em background"""
+        while True:
+            try:
+                # Coleta logs do queue
+                entries = []
+                start_time = time.time()
+                
+                # Espera até ter batch_size logs ou timeout de 5 segundos
+                while len(entries) < self.batch_size and (time.time() - start_time) < 5:
+                    try:
+                        entry = self.log_queue.get(timeout=1)
+                        entries.append(entry)
+                    except:
+                        break
+                
+                # Se tem logs, envia
+                if entries:
+                    if self._send_to_loki(entries):
+                        self.logs_sent += len(entries)
+                        if self.logs_sent % 10 == 0 or len(entries) > 0:
+                            self.sender_logger.info(
+                                f"📤 POST para Grafana/Loki | "
+                                f"Endpoint: {self.loki_endpoint} | "
+                                f"JOB: {self.loki_job} | "
+                                f"Total enviados: {self.logs_sent} | "
+                                f"Batch: {len(entries)} logs"
+                            )
+                    else:
+                        self.logs_failed += len(entries)
+                        
+            except Exception as e:
+                self.sender_logger.error(f"❌ Erro no processamento de batch: {str(e)}")
+                time.sleep(1)
     
-    def setFormatter(self, formatter):
-        """Define o formatador"""
-        super().setFormatter(formatter)
-        self.loki_handler.setFormatter(formatter)
+    def emit(self, record: logging.LogRecord):
+        """Adiciona o log ao queue para envio"""
+        try:
+            # Formata o log para o formato do Loki
+            entry = self._format_log_entry(record)
+            # Adiciona ao queue (não bloqueia)
+            self.log_queue.put_nowait(entry)
+        except Exception as e:
+            # Se falhar, apenas registra o erro sem bloquear
+            self.sender_logger.error(f"❌ Erro ao adicionar log ao queue: {str(e)}")
 
 
 def configure_logging(
@@ -121,50 +199,20 @@ def configure_logging(
     loki_connected = False
     if loki_enabled and loki_url and loki_job:
         try:
-            # Garante que o Python encontre os pacotes instalados
-            # Usa site.getsitepackages() para encontrar os caminhos corretos
-            import site
-            site_packages_paths = site.getsitepackages()
-            
-            # Adiciona também caminhos padrão caso site.getsitepackages() não funcione
-            default_paths = [
-                '/usr/local/lib/python3.11/site-packages',
-                '/usr/local/lib/python3/site-packages',
-                '/usr/lib/python3.11/site-packages',
-                '/usr/lib/python3/site-packages',
-            ]
-            
-            # Adiciona todos os caminhos válidos ao sys.path
-            all_paths = list(site_packages_paths) + default_paths
-            for path in all_paths:
-                if os.path.exists(path) and path not in sys.path:
-                    sys.path.insert(0, path)
-            
-            # Tenta importar o módulo
-            from python_logging_loki import LokiHandler
-            
-            # Cria o handler do Loki
-            loki_handler_base = LokiHandler(
-                url=f"{loki_url}/loki/api/v1/push",
-                tags={"job": loki_job, "application": "produto-api"},
-                version="1"
+            # Cria o handler customizado do Loki (sem dependência externa)
+            loki_handler = LokiHandler(
+                loki_url=loki_url,
+                loki_job=loki_job,
+                batch_size=10,
+                timeout=5
             )
-            loki_handler_base.setLevel(level)
+            loki_handler.setLevel(level)
             
             # Formato para Loki
             loki_formatter = logging.Formatter(
                 '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
                 datefmt=date_format
             )
-            loki_handler_base.setFormatter(loki_formatter)
-            
-            # Cria handler customizado com logging sobre envio
-            loki_handler = LokiHandlerWithLogging(
-                loki_handler=loki_handler_base,
-                loki_url=loki_url,
-                loki_job=loki_job
-            )
-            loki_handler.setLevel(level)
             loki_handler.setFormatter(loki_formatter)
             
             root_logger.addHandler(loki_handler)
@@ -172,24 +220,19 @@ def configure_logging(
             # Log inicial sobre configuração do Loki
             logger = logging.getLogger(__name__)
             endpoint = f"{loki_url}/loki/api/v1/push"
-            try:
-                import python_logging_loki
-                loki_version = getattr(python_logging_loki, '__version__', 'desconhecida')
-            except:
-                loki_version = '0.3.1'
             
             logger.info("=" * 80)
             logger.info("📡 CONFIGURAÇÃO DO GRAFANA/LOKI")
-            logger.info(f"   ✅ python-logging-loki v{loki_version} importado com sucesso")
+            logger.info("   ✅ Handler customizado criado com sucesso")
             logger.info(f"   🔗 Endpoint: {endpoint}")
             logger.info(f"   📋 JOB: {loki_job}")
             logger.info(f"   📤 Método: POST")
             logger.info(f"   🏷️  Tags: job={loki_job}, application=produto-api")
             logger.info("   ✅ Handler configurado e pronto para enviar logs")
+            logger.info("   📦 Envio em batch (10 logs ou 5 segundos)")
             logger.info("=" * 80)
             
             # Configura uma função auxiliar para garantir que novos loggers também usem o Loki
-            # Isso é importante para loggers criados pelo uvicorn após a inicialização
             def configure_logger_for_loki(logger_name: str):
                 """Configura um logger específico para usar o Loki"""
                 logger_instance = logging.getLogger(logger_name)
@@ -200,10 +243,11 @@ def configure_logging(
                 # Adiciona nossos handlers
                 logger_instance.addHandler(console_handler)
                 # Cria novo handler do Loki para este logger específico
-                loki_handler_for_logger = LokiHandlerWithLogging(
-                    loki_handler=loki_handler_base,
+                loki_handler_for_logger = LokiHandler(
                     loki_url=loki_url,
-                    loki_job=loki_job
+                    loki_job=loki_job,
+                    batch_size=10,
+                    timeout=5
                 )
                 loki_handler_for_logger.setLevel(level)
                 loki_handler_for_logger.setFormatter(loki_formatter)
@@ -211,7 +255,6 @@ def configure_logging(
                 logger_instance.propagate = False
             
             # Cria uma função que será chamada quando o uvicorn iniciar
-            # para configurar os loggers do uvicorn
             def ensure_uvicorn_loggers_configured():
                 """Garante que os loggers do uvicorn estão configurados para o Loki"""
                 logger_names_to_configure = [
@@ -224,76 +267,17 @@ def configure_logging(
                     logger_instance = logging.getLogger(logger_name)
                     # Se o logger tem handlers mas não tem o nosso handler do Loki
                     has_loki = any(
-                        isinstance(h, LokiHandlerWithLogging) 
+                        isinstance(h, LokiHandler) 
                         for h in logger_instance.handlers
                     )
                     if not has_loki:
                         configure_logger_for_loki(logger_name)
             
             # Armazena a função para ser chamada depois
-            # Isso será útil quando o uvicorn iniciar
             root_logger._ensure_uvicorn_loggers_configured = ensure_uvicorn_loggers_configured
             
             loki_connected = True
             
-        except ImportError as e:
-            logger = logging.getLogger(__name__)
-            # Tenta encontrar onde o pacote deveria estar
-            import site
-            site_packages = site.getsitepackages()
-            logger.warning(
-                f"⚠️ python-logging-loki não pode ser importado. "
-                f"Erro: {str(e)} | "
-                f"Python path: {sys.path[:5]} | "
-                f"Site packages: {site_packages} | "
-                f"Tente: pip install python-logging-loki==0.3.1"
-            )
-            # Tenta verificar se o pacote está instalado
-            try:
-                import subprocess
-                result = subprocess.run(
-                    [sys.executable, "-m", "pip", "list"],
-                    capture_output=True,
-                    text=True,
-                    timeout=5
-                )
-                if "python-logging-loki" in result.stdout:
-                    logger.warning("   ℹ️ O pacote está listado no pip, mas não pode ser importado.")
-                    logger.warning(f"   💡 Tentando adicionar site-packages manualmente...")
-                    # Tenta adicionar os caminhos do site-packages novamente
-                    for sp_path in site_packages:
-                        if os.path.exists(sp_path) and sp_path not in sys.path:
-                            sys.path.insert(0, sp_path)
-                    # Tenta importar novamente
-                    try:
-                        from python_logging_loki import LokiHandler
-                        logger.info("   ✅ Módulo encontrado após adicionar site-packages!")
-                        # Se chegou aqui, o módulo foi encontrado, então recria o handler
-                        loki_handler_base = LokiHandler(
-                            url=f"{loki_url}/loki/api/v1/push",
-                            tags={"job": loki_job, "application": "produto-api"},
-                            version="1"
-                        )
-                        loki_handler_base.setLevel(level)
-                        loki_formatter = logging.Formatter(
-                            '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-                            datefmt=date_format
-                        )
-                        loki_handler_base.setFormatter(loki_formatter)
-                        loki_handler = LokiHandlerWithLogging(
-                            loki_handler=loki_handler_base,
-                            loki_url=loki_url,
-                            loki_job=loki_job
-                        )
-                        loki_handler.setLevel(level)
-                        loki_handler.setFormatter(loki_formatter)
-                        root_logger.addHandler(loki_handler)
-                        loki_connected = True
-                        logger.info("   ✅ Loki handler configurado com sucesso!")
-                    except ImportError:
-                        logger.warning("   ❌ Ainda não foi possível importar o módulo.")
-            except Exception:
-                pass
         except Exception as e:
             logger = logging.getLogger(__name__)
             logger.error(f"❌ Erro ao configurar Loki handler: {str(e)} | Tipo: {type(e).__name__}")
