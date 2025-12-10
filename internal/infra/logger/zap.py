@@ -1,4 +1,5 @@
 import logging
+import os
 import sys
 from typing import Optional
 
@@ -120,6 +121,16 @@ def configure_logging(
     loki_connected = False
     if loki_enabled and loki_url and loki_job:
         try:
+            # Garante que o Python encontre os pacotes instalados
+            # Adiciona os caminhos padrão do site-packages ao sys.path
+            site_packages_paths = [
+                '/usr/local/lib/python3.11/site-packages',
+                '/usr/lib/python3.11/site-packages',
+            ]
+            for path in site_packages_paths:
+                if os.path.exists(path) and path not in sys.path:
+                    sys.path.insert(0, path)
+            
             from python_logging_loki import LokiHandler
             
             # Cria o handler do Loki
