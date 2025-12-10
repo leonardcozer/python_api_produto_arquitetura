@@ -151,8 +151,15 @@ def configure_logging(
             # Log inicial sobre configuração do Loki
             logger = logging.getLogger(__name__)
             endpoint = f"{loki_url}/loki/api/v1/push"
+            try:
+                import python_logging_loki
+                loki_version = getattr(python_logging_loki, '__version__', 'desconhecida')
+            except:
+                loki_version = '0.3.1'
+            
             logger.info("=" * 80)
             logger.info("📡 CONFIGURAÇÃO DO GRAFANA/LOKI")
+            logger.info(f"   ✅ python-logging-loki v{loki_version} importado com sucesso")
             logger.info(f"   🔗 Endpoint: {endpoint}")
             logger.info(f"   📋 JOB: {loki_job}")
             logger.info(f"   📤 Método: POST")
@@ -208,12 +215,32 @@ def configure_logging(
             
             loki_connected = True
             
-        except ImportError:
+        except ImportError as e:
             logger = logging.getLogger(__name__)
-            logger.warning("⚠️ python-logging-loki não instalado. Instale com: pip install python-logging-loki")
+            import sys
+            import os
+            logger.warning(
+                f"⚠️ python-logging-loki não pode ser importado. "
+                f"Erro: {str(e)} | "
+                f"Python path: {sys.path[:3]} | "
+                f"Tente: pip install python-logging-loki==0.3.1"
+            )
+            # Tenta verificar se o pacote está instalado
+            try:
+                import subprocess
+                result = subprocess.run(
+                    [sys.executable, "-m", "pip", "list"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                if "python-logging-loki" in result.stdout:
+                    logger.warning("   ℹ️ O pacote está listado no pip, mas não pode ser importado. Pode ser um problema de path.")
+            except Exception:
+                pass
         except Exception as e:
             logger = logging.getLogger(__name__)
-            logger.error(f"❌ Erro ao configurar Loki handler: {str(e)}")
+            logger.error(f"❌ Erro ao configurar Loki handler: {str(e)} | Tipo: {type(e).__name__}")
     else:
         logger = logging.getLogger(__name__)
         if not loki_enabled:
