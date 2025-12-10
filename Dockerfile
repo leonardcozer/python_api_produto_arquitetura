@@ -14,16 +14,7 @@ RUN sed -i 's|http://deb.debian.org/debian|https://deb.debian.org/debian|g' /etc
 # Copia requirements e instala dependências Python
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt && \
-    python -c "import sys; sys.path.insert(0, '/usr/local/lib/python3.11/site-packages'); \
-    try: \
-        from python_logging_loki import LokiHandler; \
-        print('✅ python-logging-loki instalado com sucesso'); \
-    except ImportError: \
-        print('⚠️ Tentando instalar python-logging-loki manualmente...'); \
-        import subprocess; \
-        subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--no-cache-dir', 'python-logging-loki==0.3.1']); \
-        print('✅ python-logging-loki instalado manualmente')"
+    pip install --no-cache-dir -r requirements.txt
 
 # Copia o código da aplicação
 COPY . .
