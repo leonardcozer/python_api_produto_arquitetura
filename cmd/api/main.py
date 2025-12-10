@@ -19,8 +19,31 @@ from internal.infra.database.banco_dados import db
 from internal.infra.http.server import create_server
 from internal.infra.http.middlewares import configure_middlewares, configure_cors
 from internal.infra.logger.zap import LOGGER_MAIN, configure_logging
-from internal.infra.metrics.prometheus import setup_metrics, get_metrics, get_metrics_content_type
 from internal.modules.produto.routes import router as produto_router
+
+# Importa métricas do Prometheus (com tratamento de erro)
+METRICS_AVAILABLE = False
+try:
+    from internal.infra.metrics.prometheus import setup_metrics, get_metrics, get_metrics_content_type
+    METRICS_AVAILABLE = True
+except ImportError as e:
+    # Log será feito depois que o logger estiver configurado
+    _metrics_import_error = str(e)
+    # Cria funções stub
+    def setup_metrics(*args, **kwargs):
+        pass
+    def get_metrics():
+        return b"# Metrics not available - prometheus_client not installed\n"
+    def get_metrics_content_type():
+        return "text/plain"
+except Exception as e:
+    _metrics_import_error = str(e)
+    def setup_metrics(*args, **kwargs):
+        pass
+    def get_metrics():
+        return b"# Metrics not available\n"
+    def get_metrics_content_type():
+        return "text/plain"
 
 # Configura logging com suporte ao Loki
 loki_connected = configure_logging(
@@ -30,6 +53,13 @@ loki_connected = configure_logging(
     loki_enabled=settings.loki.enabled
 )
 logger = logging.getLogger(LOGGER_MAIN)
+
+# Log sobre status das métricas
+if not METRICS_AVAILABLE:
+    try:
+        logger.warning(f"⚠️ Métricas do Prometheus não disponíveis: {_metrics_import_error}")
+    except:
+        logger.warning("⚠️ Métricas do Prometheus não disponíveis")
 
 # Mensagem informativa sobre Grafana/Loki
 if loki_connected:
@@ -89,26 +119,48 @@ def create_app() -> FastAPI:
     configure_middlewares(app)
     
     # Configura métricas do Prometheus
-    setup_metrics(version="1.0.0", environment=settings.environment)
-    logger.info("✅ Métricas do Prometheus configuradas")
+    if METRICS_AVAILABLE:
+        try:
+            setup_metrics(version="1.0.0", environment=settings.environment)
+            logger.info("✅ Métricas do Prometheus configuradas")
+        except Exception as e:
+            logger.error(f"❌ Erro ao configurar métricas: {str(e)}")
+    
+    # Rota de métricas do Prometheus (sempre registrada)
+    @app.get("/metrics", include_in_schema=False)
+    async def metrics():
+        """Endpoint para expor métricas do Prometheus"""
+        from fastapi.responses import Response
+        if not METRICS_AVAILABLE:
+            return Response(
+                content=b"# Metrics not available - prometheus_client not installed\n# Install with: pip install prometheus-client\n",
+                media_type="text/plain",
+                status_code=200  # Retorna 200 mesmo sem métricas
+            )
+        try:
+            metrics_data = get_metrics()
+            return Response(
+                content=metrics_data,
+                media_type=get_metrics_content_type()
+            )
+        except Exception as e:
+            logger.error(f"❌ Erro ao gerar métricas: {str(e)}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return Response(
+                content=f"# Error generating metrics: {str(e)}\n".encode(),
+                media_type="text/plain",
+                status_code=500
+            )
+    
+    logger.info("✅ Rota /metrics registrada")
     
     # Registra as rotas
     app.include_router(produto_router)
     
-    # Rota de métricas do Prometheus
-    @app.get(
-        "/metrics",
-        tags=["Metrics"],
-        summary="Prometheus Metrics",
-        description="Endpoint para métricas do Prometheus"
-    )
-    async def metrics():
-        """Endpoint para expor métricas do Prometheus"""
-        from fastapi.responses import Response
-        return Response(
-            content=get_metrics(),
-            media_type=get_metrics_content_type()
-        )
+    # Log de debug: lista todas as rotas registradas
+    routes_list = [route.path for route in app.routes if hasattr(route, 'path')]
+    logger.info(f"✅ Rotas registradas: {routes_list}")
     
     # Rota de health check
     @app.get(
