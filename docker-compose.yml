@@ -1,0 +1,13 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./:/app
+    ports:
+      - "${SERVER_PORT:-8000}:8000"
+    command: ["python", "cmd/api/main.py"]
