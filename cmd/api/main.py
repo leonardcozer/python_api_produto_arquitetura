@@ -36,7 +36,9 @@ if loki_connected:
     logger.info("📊 GRAFANA + LOKI CONECTADO E ATIVO")
     logger.info(f"   🔗 URL: {settings.loki.url}")
     logger.info(f"   📋 JOB: {settings.loki.job}")
+    logger.info(f"   📤 Endpoint POST: {settings.loki.url}/loki/api/v1/push")
     logger.info("   ✅ Todos os logs estão sendo enviados para o Grafana/Loki")
+    logger.info("   📝 Logs de envio serão exibidos a cada 10 logs ou em nível DEBUG")
     logger.info("=" * 80)
 
 

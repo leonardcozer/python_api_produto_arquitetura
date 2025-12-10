@@ -15,6 +15,69 @@ def get_logger(name: str) -> logging.Logger:
     return logging.getLogger(name)
 
 
+class LokiHandlerWithLogging(logging.Handler):
+    """
+    Handler customizado do Loki que adiciona logging sobre o envio de logs
+    """
+    def __init__(self, loki_handler, loki_url: str, loki_job: str):
+        super().__init__()
+        self.loki_handler = loki_handler
+        self.loki_url = loki_url
+        self.loki_job = loki_job
+        self.logs_sent = 0
+        self.logs_failed = 0
+        self.logger = logging.getLogger("loki_sender")
+        # Configura o logger para não criar loop infinito
+        self.logger.propagate = False
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setFormatter(logging.Formatter('%(message)s'))
+        self.logger.addHandler(console_handler)
+        self.logger.setLevel(logging.DEBUG)
+        
+    def emit(self, record):
+        """Envia o log para o Loki e registra informações sobre o envio"""
+        try:
+            # Envia o log para o Loki usando o handler original
+            self.loki_handler.emit(record)
+            
+            # Incrementa contador
+            self.logs_sent += 1
+            
+            # Log informativo sobre o envio (a cada 10 logs, no primeiro log, ou em nível DEBUG)
+            if self.logs_sent == 1 or self.logs_sent % 10 == 0 or record.levelno == logging.DEBUG:
+                endpoint = f"{self.loki_url}/loki/api/v1/push"
+                self.logger.info(
+                    f"📤 POST para Grafana/Loki | "
+                    f"Endpoint: {endpoint} | "
+                    f"JOB: {self.loki_job} | "
+                    f"Total enviados: {self.logs_sent} | "
+                    f"Level: {record.levelname} | "
+                    f"Logger: {record.name} | "
+                    f"Mensagem: {record.getMessage()[:50]}..."
+                )
+        except Exception as e:
+            # Log de erro se falhar o envio
+            self.logs_failed += 1
+            endpoint = f"{self.loki_url}/loki/api/v1/push"
+            self.logger.error(
+                f"❌ Erro no POST para Grafana/Loki | "
+                f"Endpoint: {endpoint} | "
+                f"JOB: {self.loki_job} | "
+                f"Erro: {str(e)} | "
+                f"Total falhas: {self.logs_failed}"
+            )
+    
+    def setLevel(self, level):
+        """Define o nível do handler"""
+        super().setLevel(level)
+        self.loki_handler.setLevel(level)
+    
+    def setFormatter(self, formatter):
+        """Define o formatador"""
+        super().setFormatter(formatter)
+        self.loki_handler.setFormatter(formatter)
+
+
 def configure_logging(
     log_level: str = "INFO",
     loki_url: Optional[str] = None,
@@ -60,21 +123,42 @@ def configure_logging(
             from python_logging_loki import LokiHandler
             
             # Cria o handler do Loki
-            loki_handler = LokiHandler(
+            loki_handler_base = LokiHandler(
                 url=f"{loki_url}/loki/api/v1/push",
                 tags={"job": loki_job, "application": "produto-api"},
                 version="1"
             )
-            loki_handler.setLevel(level)
+            loki_handler_base.setLevel(level)
             
             # Formato para Loki
             loki_formatter = logging.Formatter(
                 '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
                 datefmt=date_format
             )
+            loki_handler_base.setFormatter(loki_formatter)
+            
+            # Cria handler customizado com logging sobre envio
+            loki_handler = LokiHandlerWithLogging(
+                loki_handler=loki_handler_base,
+                loki_url=loki_url,
+                loki_job=loki_job
+            )
+            loki_handler.setLevel(level)
             loki_handler.setFormatter(loki_formatter)
             
             root_logger.addHandler(loki_handler)
+            
+            # Log inicial sobre configuração do Loki
+            logger = logging.getLogger(__name__)
+            endpoint = f"{loki_url}/loki/api/v1/push"
+            logger.info("=" * 80)
+            logger.info("📡 CONFIGURAÇÃO DO GRAFANA/LOKI")
+            logger.info(f"   🔗 Endpoint: {endpoint}")
+            logger.info(f"   📋 JOB: {loki_job}")
+            logger.info(f"   📤 Método: POST")
+            logger.info(f"   🏷️  Tags: job={loki_job}, application=produto-api")
+            logger.info("   ✅ Handler configurado e pronto para enviar logs")
+            logger.info("=" * 80)
             
             # Configura uma função auxiliar para garantir que novos loggers também usem o Loki
             # Isso é importante para loggers criados pelo uvicorn após a inicialização
@@ -87,7 +171,15 @@ def configure_logging(
                     logger_instance.removeHandler(handler)
                 # Adiciona nossos handlers
                 logger_instance.addHandler(console_handler)
-                logger_instance.addHandler(loki_handler)
+                # Cria novo handler do Loki para este logger específico
+                loki_handler_for_logger = LokiHandlerWithLogging(
+                    loki_handler=loki_handler_base,
+                    loki_url=loki_url,
+                    loki_job=loki_job
+                )
+                loki_handler_for_logger.setLevel(level)
+                loki_handler_for_logger.setFormatter(loki_formatter)
+                logger_instance.addHandler(loki_handler_for_logger)
                 logger_instance.propagate = False
             
             # Cria uma função que será chamada quando o uvicorn iniciar
@@ -104,7 +196,7 @@ def configure_logging(
                     logger_instance = logging.getLogger(logger_name)
                     # Se o logger tem handlers mas não tem o nosso handler do Loki
                     has_loki = any(
-                        isinstance(h, type(loki_handler)) 
+                        isinstance(h, LokiHandlerWithLogging) 
                         for h in logger_instance.handlers
                     )
                     if not has_loki:
