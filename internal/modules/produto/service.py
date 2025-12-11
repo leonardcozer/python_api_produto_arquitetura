@@ -4,8 +4,18 @@ from sqlalchemy.orm import Session
 from internal.modules.produto.repository import ProdutoRepository
 from internal.modules.produto.dto import ProdutoCreateRequest, ProdutoUpdateRequest, ProdutoResponse, ProdutoListResponse
 from pkg.apperrors.exceptions import NotFoundError, BadRequestError
+from internal.infra.tracing.opentelemetry_setup import get_tracer
 
 logger = logging.getLogger("service")
+tracer = get_tracer(__name__)
+
+# Importa trace para status (se disponível)
+try:
+    from opentelemetry import trace
+    TRACE_AVAILABLE = True
+except ImportError:
+    TRACE_AVAILABLE = False
+    trace = None
 
 
 class ProdutoService:
@@ -16,21 +26,48 @@ class ProdutoService:
 
     def criar_produto(self, produto_request: ProdutoCreateRequest) -> ProdutoResponse:
         """Cria um novo produto com validações de negócio"""
+        # Cria span para tracing
+        if tracer:
+            span = tracer.start_span("service.criar_produto")
+        else:
+            span = None
+        
         try:
+            if span:
+                span.set_attribute("produto.nome", produto_request.nome)
+                span.set_attribute("produto.categoria", produto_request.categoria)
+            
             # Validações de negócio
             if produto_request.preco < 0.01:
+                if span and TRACE_AVAILABLE:
+                    span.record_exception(BadRequestError("O preço deve ser maior que 0"))
+                    span.set_status(trace.Status(trace.StatusCode.ERROR, "Preço inválido"))
                 raise BadRequestError("O preço deve ser maior que 0")
             
             if produto_request.quantidade < 0:
+                if span and TRACE_AVAILABLE:
+                    span.record_exception(BadRequestError("A quantidade não pode ser negativa"))
+                    span.set_status(trace.Status(trace.StatusCode.ERROR, "Quantidade inválida"))
                 raise BadRequestError("A quantidade não pode ser negativa")
 
             produto_data = produto_request.dict()
             produto = self.repository.create(produto_data)
             logger.info(f"Produto criado via service: {produto.id}")
+            
+            if span and TRACE_AVAILABLE:
+                span.set_attribute("produto.id", produto.id)
+                span.set_status(trace.Status(trace.StatusCode.OK))
+            
             return ProdutoResponse.from_orm(produto)
         except Exception as e:
             logger.error(f"Erro ao criar produto: {str(e)}")
+            if span and TRACE_AVAILABLE:
+                span.record_exception(e)
+                span.set_status(trace.Status(trace.StatusCode.ERROR, str(e)))
             raise
+        finally:
+            if span:
+                span.end()
 
     def obter_produto(self, produto_id: int) -> ProdutoResponse:
         """Obtém um produto pelo ID"""

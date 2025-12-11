@@ -19,6 +19,7 @@ from internal.infra.database.banco_dados import db
 from internal.infra.http.server import create_server
 from internal.infra.http.middlewares import configure_middlewares, configure_cors
 from internal.infra.logger.zap import LOGGER_MAIN, configure_logging, shutdown_loki_handler
+from internal.infra.tracing.opentelemetry_setup import setup_tracing, instrument_fastapi, instrument_sqlalchemy
 from internal.modules.produto.routes import router as produto_router
 from pkg.apperrors.exception_handlers import register_exception_handlers
 
@@ -169,6 +170,28 @@ def create_app() -> FastAPI:
     # Cria a instância do FastAPI
     app = create_server()
     app.router.lifespan_context = lifespan
+    
+    # Configura OpenTelemetry/Tempo (deve ser antes de instrumentar)
+    tempo_connected = False
+    if settings.tempo.enabled:
+        try:
+            tempo_connected = setup_tracing(
+                tempo_endpoint=settings.tempo.endpoint,
+                service_name="produto-api",
+                enabled=settings.tempo.enabled
+            )
+            if tempo_connected:
+                # Instrumenta SQLAlchemy para tracing de queries
+                instrument_sqlalchemy()
+        except Exception as e:
+            logger.error(f"❌ Erro ao configurar Tempo: {str(e)}")
+    
+    # Instrumenta FastAPI para tracing automático (deve ser antes de registrar rotas)
+    if tempo_connected:
+        try:
+            instrument_fastapi(app)
+        except Exception as e:
+            logger.warning(f"⚠️ Erro ao instrumentar FastAPI: {str(e)}")
     
     # Registra exception handlers globais (deve ser antes das rotas)
     register_exception_handlers(app)
@@ -357,6 +380,19 @@ def main():
             root_logger._ensure_uvicorn_loggers_configured()
     else:
         logger.info("📊 Grafana/Loki: DESCONECTADO")
+    
+    # Verifica status do Tempo
+    try:
+        from internal.infra.tracing.opentelemetry_setup import TRACING_AVAILABLE
+        if TRACING_AVAILABLE and settings.tempo.enabled:
+            logger.info(f"🔍 Tempo/OpenTelemetry: CONECTADO - Endpoint: {settings.tempo.endpoint}")
+        elif settings.tempo.enabled:
+            logger.info("🔍 Tempo/OpenTelemetry: DESCONECTADO (biblioteca não instalada)")
+        else:
+            logger.info("🔍 Tempo/OpenTelemetry: DESABILITADO")
+    except:
+        logger.info("🔍 Tempo/OpenTelemetry: NÃO CONFIGURADO")
+    
     logger.info("=" * 80)
     
     # Inicia o servidor Uvicorn

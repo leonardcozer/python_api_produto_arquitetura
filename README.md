@@ -17,33 +17,51 @@ my-api-project/
 ├── internal/
 │   ├── infra/                       # Camada de Infraestrutura
 │   │   ├── database/
-│   │   │   └── banco_dados.py       # Conexão com PostgreSQL
+│   │   │   └── banco_dados.py       # Conexão com PostgreSQL (context manager)
 │   │   ├── http/
 │   │   │   ├── server.py            # Configuração FastAPI
-│   │   │   └── middlewares.py       # Middlewares (CORS, Logger, Métricas)
+│   │   │   └── middlewares.py       # Middlewares (CORS, Logger, Métricas, Service Map)
 │   │   ├── logger/
-│   │   │   └── zap.py               # Configuração de Logs com Loki
+│   │   │   └── zap.py               # Configuração de Logs com Loki (graceful shutdown)
 │   │   └── metrics/
-│   │       └── prometheus.py       # Métricas do Prometheus
+│   │       ├── prometheus.py        # Métricas do Prometheus
+│   │       └── service_map.py      # Métricas de Service Map (Node Graph)
 │   │
 │   └── modules/                     # Módulos de Negócio
 │       └── produto/                 # Módulo de Produtos
 │           ├── dto.py               # DTOs (Pydantic)
 │           ├── entity.py            # Models (SQLAlchemy)
-│           ├── handler.py           # Controllers/Handlers
+│           ├── handler.py           # Controllers/Handlers (com validação)
 │           ├── repository.py        # Queries SQL
 │           ├── routes.py            # Definição de rotas
 │           └── service.py           # Lógica de negócio
 │
 ├── pkg/                             # Código reutilizável
 │   ├── apperrors/                   # Exceções customizadas
+│   │   ├── exceptions.py           # Exceções da aplicação
+│   │   └── exception_handlers.py    # Exception handlers globais
 │   └── utils/                       # Validadores e utilitários
+│       └── input_validators.py     # Validadores e sanitizadores de input
+│
+├── grafana/                         # Configurações do Grafana
+│   ├── dashboards/
+│   │   └── service-map.json        # Dashboard Service Map (Node Graph)
+│   └── provisioning/
+│       └── dashboards/
+│           └── dashboards.yml      # Provisionamento de dashboards
+│
+├── grafana/                         # Configurações do Grafana
+│   ├── dashboards/                 # Dashboards
+│   └── provisioning/               # Provisionamento
 │
 ├── .env                             # Variáveis de ambiente
 ├── requirements.txt                 # Dependências Python
 ├── Dockerfile                       # Containerização
+├── docker-compose.yml              # Orquestração Docker
 ├── Makefile                         # Automação de tarefas
-└── README.md                        # Documentação
+├── README.md                        # Documentação principal
+├── SERVICE-MAP-SETUP.md            # Guia do Service Map
+└── analise.md                      # Análise da arquitetura
 ```
 
 ## 🚀 Instalação
@@ -97,6 +115,10 @@ LOG_LEVEL=INFO
 LOKI_URL=http://172.30.0.45:3100
 LOKI_JOB=MONITORAMENTO_PRODUTO
 LOKI_ENABLED=True
+
+# Observabilidade - Tempo (Distributed Tracing)
+TEMPO_ENDPOINT=http://172.30.0.45:4317
+TEMPO_ENABLED=True
 ```
 
 **Nota:** O Loki está habilitado por padrão. Para desabilitar, defina `LOKI_ENABLED=False`.
@@ -142,7 +164,12 @@ Após iniciar a aplicação, acesse:
 
 ### Observabilidade
 - **Métricas Prometheus**: http://localhost:8000/metrics
-- **Health Check**: http://localhost:8000/health
+- **Health Check (Liveness)**: http://localhost:8000/health
+- **Readiness Check**: http://localhost:8000/ready
+
+### Documentação Adicional
+- **Service Map Setup**: Veja `SERVICE-MAP-SETUP.md` para configurar o Node Graph
+- **Análise da Arquitetura**: Veja `analise.md` para análise técnica completa
 
 ## 📊 Observabilidade - Grafana + Loki + Prometheus
 
@@ -212,9 +239,17 @@ Retorna métricas no formato do Prometheus.
 - `application_info`: Informações da aplicação (version, environment)
 - `application_uptime_seconds`: Tempo de atividade da aplicação
 
-**Métricas de Banco de Dados (preparadas):**
+**Métricas de Banco de Dados:**
 - `database_connections_active`: Conexões ativas
 - `database_queries_total`: Total de queries (labels: operation, table)
+
+**Métricas de Service Map (Node Graph):**
+- `service_map_requests_total`: Total de requisições entre serviços (labels: source_service, target_service, method, status_code)
+- `service_map_request_duration_seconds`: Duração de requisições entre serviços (histograma)
+- `service_map_errors_total`: Total de erros entre serviços
+- `service_dependency_active`: Status de dependências ativas
+- `service_health_status`: Status de saúde dos serviços
+- `service_throughput_rps`: Requisições por segundo por serviço
 
 #### Configuração do Prometheus
 
@@ -248,23 +283,107 @@ rate(http_errors_total[5m])
 
 # Logs enviados para o Loki por minuto
 rate(loki_logs_sent_total[1m])
+
+# Requisições entre serviços (Service Map)
+rate(service_map_requests_total[5m])
+
+# Tempo médio de resposta entre serviços
+rate(service_map_request_duration_seconds_sum[5m]) / 
+rate(service_map_request_duration_seconds_count[5m]) * 1000
 ```
+
+### 🗺️ Service Map (Node Graph)
+
+A aplicação expõe métricas de Service Map que permitem visualizar a arquitetura do sistema no Grafana usando Node Graph, mostrando serviços, conexões e métricas em tempo real.
+
+#### Funcionalidades
+
+- ✅ Visualização gráfica da arquitetura (serviços como nós, conexões como arestas)
+- ✅ Métricas por serviço: tempo de resposta, requisições por segundo, taxa de erros
+- ✅ Indicadores visuais de saúde (verde = saudável, vermelho = problemas)
+- ✅ Mapeamento automático de dependências
+- ✅ Atualização em tempo real
+
+#### Serviços Mapeados
+
+- **produto-api** - API principal
+- **postgresql** - Banco de dados
+- **external-client** - Clientes externos
+- **grafana** - Quando acessa métricas
+- **prometheus** - Quando coleta métricas
+
+#### Configuração do Dashboard
+
+1. **Importar Dashboard:**
+   - Acesse Grafana → Dashboards → Import
+   - Use o arquivo `grafana/dashboards/service-map.json`
+   - Ou configure via provisioning (veja `grafana/provisioning/dashboards/dashboards.yml`)
+
+2. **Configurar Data Source:**
+   - Certifique-se de que o Prometheus está configurado como data source
+   - URL: `http://prometheus:9090` (ou sua URL)
+
+3. **Visualizar:**
+   - O Node Graph mostrará automaticamente os serviços e conexões
+   - Métricas serão atualizadas em tempo real
+
+#### Documentação Completa
+
+Para mais detalhes sobre configuração e uso do Service Map, consulte:
+- `SERVICE-MAP-SETUP.md` - Guia completo de configuração
+- `grafana/README.md` - Documentação do Grafana
 
 ## 🔌 Endpoints
 
-### Health Check
+### Health Check (Liveness Probe)
 ```
 GET /health
 ```
 
-Retorna o status da aplicação:
+Retorna o status básico da aplicação:
 ```json
 {
   "status": "healthy",
+  "service": "produto-api",
   "environment": "development",
   "version": "1.0.0"
 }
 ```
+
+### Readiness Check
+```
+GET /ready
+```
+
+Verifica se a aplicação está pronta para receber requisições, incluindo verificações de:
+- Conexão com banco de dados
+- Status do pool de conexões
+- Status do Loki (se habilitado)
+
+Retorna:
+```json
+{
+  "status": "ready",
+  "checks": {
+    "database": true,
+    "loki": true,
+    "database_pool": {
+      "pool_size": 20,
+      "checked_in": 15,
+      "checked_out": 5,
+      "overflow": 0,
+      "invalid": 0
+    }
+  },
+  "service": "produto-api",
+  "environment": "development",
+  "version": "1.0.0"
+}
+```
+
+**Status Codes:**
+- `200` - Aplicação pronta
+- `503` - Aplicação não pronta (dependências falhando)
 
 ### Métricas Prometheus
 ```
@@ -386,17 +505,33 @@ make clean     # Limpa arquivos temporários
 
 ## 🔐 Boas Práticas
 
+### Segurança e Validação
 - ✅ Validação em múltiplas camadas
-- ✅ Tratamento de erros robusto
+- ✅ Sanitização de inputs (prevenção de SQL injection)
+- ✅ Validação de tamanhos e formatos
+- ✅ CORS configurável e restrito
+- ✅ Validação de variáveis de ambiente obrigatórias
+
+### Confiabilidade
+- ✅ Tratamento de erros robusto com exception handlers globais
+- ✅ Gerenciamento de sessões com context managers
+- ✅ Graceful shutdown do Loki handler
+- ✅ Health checks reais (liveness e readiness)
+- ✅ Pool de conexões otimizado com timeouts
+
+### Observabilidade
 - ✅ Logging detalhado com integração Loki/Grafana
 - ✅ Métricas do Prometheus para monitoramento
-- ✅ Separação de responsabilidades
-- ✅ DTOs para transferência de dados
-- ✅ CORS configurável
-- ✅ Pool de conexões otimizado
-- ✅ Observabilidade completa (Logs + Métricas)
+- ✅ Service Map (Node Graph) para visualização de arquitetura
 - ✅ Handler customizado do Loki (sem dependências externas)
 - ✅ Envio assíncrono de logs em batch
+- ✅ Métricas de service map automáticas
+
+### Arquitetura
+- ✅ Separação de responsabilidades
+- ✅ DTOs para transferência de dados
+- ✅ Exception handlers centralizados
+- ✅ Validadores reutilizáveis
 
 ## 📝 Exemplo de Uso Completo
 
@@ -443,6 +578,12 @@ curl -X DELETE http://localhost:8000/produtos/1
 - **prometheus-client** 0.20.0 - Métricas do Prometheus
 - **requests** 2.32.5 - Cliente HTTP para envio de logs ao Loki
 - **Handler Customizado Loki** - Implementação própria para envio de logs (sem dependências externas)
+- **Service Map** - Visualização de arquitetura com Node Graph
+
+### Segurança e Validação
+- **Exception Handlers Globais** - Tratamento centralizado de erros
+- **Input Validators** - Sanitização e validação de inputs
+- **Context Managers** - Gerenciamento seguro de recursos
 
 ### Utilitários
 - **python-dotenv** 1.0.0 - Gerenciamento de env vars

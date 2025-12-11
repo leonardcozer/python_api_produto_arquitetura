@@ -57,11 +57,17 @@ class LokiConfig(BaseSettings):
     enabled: bool = os.getenv("LOKI_ENABLED", "True").lower() == "true"
 
 
+class TempoConfig(BaseSettings):
+    endpoint: str = os.getenv("TEMPO_ENDPOINT", "http://172.30.0.45:4317")
+    enabled: bool = os.getenv("TEMPO_ENABLED", "True").lower() == "true"
+
+
 class Settings(BaseSettings):
     database: DatabaseConfig = DatabaseConfig()
     server: ServerConfig = ServerConfig()
     cors: CORSConfig = CORSConfig()
     loki: LokiConfig = LokiConfig()
+    tempo: TempoConfig = TempoConfig()
     environment: str = os.getenv("ENVIRONMENT", "development")
     debug: bool = os.getenv("DEBUG", "False").lower() == "true"
 
