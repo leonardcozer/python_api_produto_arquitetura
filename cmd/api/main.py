@@ -26,6 +26,11 @@ from pkg.apperrors.exception_handlers import register_exception_handlers
 METRICS_AVAILABLE = False
 try:
     from internal.infra.metrics.prometheus import setup_metrics, get_metrics, get_metrics_content_type
+from internal.infra.metrics.service_map import (
+    set_service_dependency,
+    set_service_health,
+    record_service_call
+)
     METRICS_AVAILABLE = True
 except ImportError as e:
     # Log será feito depois que o logger estiver configurado
@@ -94,8 +99,33 @@ async def lifespan(app: FastAPI):
         db.init()
         db.create_tables()
         logger.info("✅ Banco de dados inicializado com sucesso")
+        
+        # Registra dependência do banco de dados no service map
+        if METRICS_AVAILABLE:
+            try:
+                set_service_dependency(
+                    source_service="produto-api",
+                    target_service="postgresql",
+                    dependency_type="database",
+                    active=True
+                )
+                set_service_health("produto-api", "readiness", True)
+                set_service_health("produto-api", "liveness", True)
+            except Exception as e:
+                logger.warning(f"⚠️ Erro ao registrar métricas de service map: {str(e)}")
     except Exception as e:
         logger.error(f"❌ Erro ao inicializar banco de dados: {str(e)}")
+        if METRICS_AVAILABLE:
+            try:
+                set_service_health("produto-api", "readiness", False)
+                set_service_dependency(
+                    source_service="produto-api",
+                    target_service="postgresql",
+                    dependency_type="database",
+                    active=False
+                )
+            except:
+                pass
         raise
 
     yield
@@ -218,9 +248,26 @@ def create_app() -> FastAPI:
         # Verifica conexão com banco de dados
         try:
             checks["database"] = db.check_connection()
+            # Atualiza métricas de service map
+            if METRICS_AVAILABLE:
+                try:
+                    set_service_health("produto-api", "readiness", checks["database"])
+                    set_service_dependency(
+                        source_service="produto-api",
+                        target_service="postgresql",
+                        dependency_type="database",
+                        active=checks["database"]
+                    )
+                except:
+                    pass
         except Exception as e:
             logger.error(f"Database health check failed: {str(e)}")
             checks["database"] = False
+            if METRICS_AVAILABLE:
+                try:
+                    set_service_health("produto-api", "readiness", False)
+                except:
+                    pass
         
         # Verifica status do Loki (se habilitado)
         if loki_connected:

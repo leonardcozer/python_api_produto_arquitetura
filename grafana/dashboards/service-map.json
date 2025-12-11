@@ -1,0 +1,257 @@
+{
+  "dashboard": {
+    "title": "Service Map - Produto API",
+    "tags": ["service-map", "monitoring", "architecture"],
+    "timezone": "browser",
+    "schemaVersion": 27,
+    "version": 1,
+    "refresh": "10s",
+    "panels": [
+      {
+        "id": 1,
+        "gridPos": {
+          "h": 20,
+          "w": 24,
+          "x": 0,
+          "y": 0
+        },
+        "type": "nodeGraph",
+        "title": "Service Map - Arquitetura do Sistema",
+        "targets": [
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "${DS_PROMETHEUS}"
+            },
+            "expr": "service_map_requests_total",
+            "refId": "A",
+            "legendFormat": "{{source_service}} -> {{target_service}}"
+          }
+        ],
+        "options": {
+          "node": {
+            "mainStatUnit": "ms",
+            "secondaryStatUnit": "reqps",
+            "arc": {
+              "field": "status_code",
+              "values": ["200", "400", "500"]
+            }
+          },
+          "edges": {
+            "mainStatUnit": "ms",
+            "secondaryStatUnit": "reqps"
+          }
+        },
+        "fieldConfig": {
+          "defaults": {
+            "custom": {
+              "hideFrom": {
+                "tooltip": false,
+                "viz": false,
+                "legend": false
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": 2,
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 20
+        },
+        "type": "stat",
+        "title": "Requisições por Segundo",
+        "targets": [
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "${DS_PROMETHEUS}"
+            },
+            "expr": "rate(service_map_requests_total[5m])",
+            "refId": "A",
+            "legendFormat": "{{source_service}} -> {{target_service}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "reqps",
+            "color": {
+              "mode": "palette-classic"
+            }
+          }
+        }
+      },
+      {
+        "id": 3,
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 12,
+          "y": 20
+        },
+        "type": "stat",
+        "title": "Tempo Médio de Resposta",
+        "targets": [
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "${DS_PROMETHEUS}"
+            },
+            "expr": "rate(service_map_request_duration_seconds_sum[5m]) / rate(service_map_request_duration_seconds_count[5m])",
+            "refId": "A",
+            "legendFormat": "{{source_service}} -> {{target_service}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "ms",
+            "color": {
+              "mode": "thresholds"
+            },
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {
+                  "value": null,
+                  "color": "green"
+                },
+                {
+                  "value": 100,
+                  "color": "yellow"
+                },
+                {
+                  "value": 500,
+                  "color": "red"
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 4,
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 28
+        },
+        "type": "stat",
+        "title": "Taxa de Erros",
+        "targets": [
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "${DS_PROMETHEUS}"
+            },
+            "expr": "rate(service_map_errors_total[5m])",
+            "refId": "A",
+            "legendFormat": "{{source_service}} -> {{target_service}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "ops",
+            "color": {
+              "mode": "thresholds"
+            },
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {
+                  "value": null,
+                  "color": "green"
+                },
+                {
+                  "value": 0.1,
+                  "color": "yellow"
+                },
+                {
+                  "value": 1,
+                  "color": "red"
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 5,
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 12,
+          "y": 28
+        },
+        "type": "stat",
+        "title": "Status de Saúde dos Serviços",
+        "targets": [
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "${DS_PROMETHEUS}"
+            },
+            "expr": "service_health_status",
+            "refId": "A",
+            "legendFormat": "{{service_name}} - {{check_type}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "none",
+            "color": {
+              "mode": "thresholds"
+            },
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {
+                  "value": null,
+                  "color": "red"
+                },
+                {
+                  "value": 1,
+                  "color": "green"
+                }
+              ]
+            },
+            "mappings": [
+              {
+                "type": "value",
+                "options": {
+                  "0": {
+                    "text": "Unhealthy"
+                  },
+                  "1": {
+                    "text": "Healthy"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "time": {
+      "from": "now-15m",
+      "to": "now"
+    },
+    "timepicker": {},
+    "templating": {
+      "list": []
+    },
+    "annotations": {
+      "list": []
+    },
+    "editable": true,
+    "fiscalYearStartMonth": 0,
+    "graphTooltip": 0,
+    "links": [],
+    "liveNow": false,
+    "weekStart": ""
+  }
+}
+

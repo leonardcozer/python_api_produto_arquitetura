@@ -1,4 +1,5 @@
 import logging
+import time
 from contextlib import contextmanager
 from typing import Generator
 from sqlalchemy import create_engine, text
@@ -7,6 +8,13 @@ from sqlalchemy.pool import QueuePool
 from sqlalchemy.exc import SQLAlchemyError
 
 from config.config import settings
+
+# Importa métricas de service map
+try:
+    from internal.infra.metrics.service_map import record_service_call
+    SERVICE_MAP_AVAILABLE = True
+except ImportError:
+    SERVICE_MAP_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -55,16 +63,61 @@ class Database:
             self.init()
         
         session = self.SessionLocal()
+        start_time = time.time()
         try:
             yield session
             session.commit()
+            
+            # Registra chamada bem-sucedida no service map
+            if SERVICE_MAP_AVAILABLE:
+                try:
+                    duration = time.time() - start_time
+                    record_service_call(
+                        source_service="produto-api",
+                        target_service="postgresql",
+                        method="query",
+                        duration=duration,
+                        status_code=200
+                    )
+                except:
+                    pass
         except SQLAlchemyError as e:
             session.rollback()
             logger.error(f"Database error: {str(e)}")
+            
+            # Registra erro no service map
+            if SERVICE_MAP_AVAILABLE:
+                try:
+                    duration = time.time() - start_time
+                    record_service_call(
+                        source_service="produto-api",
+                        target_service="postgresql",
+                        method="query",
+                        duration=duration,
+                        status_code=500,
+                        error_type="database_error"
+                    )
+                except:
+                    pass
             raise
         except Exception as e:
             session.rollback()
             logger.error(f"Unexpected error in database session: {str(e)}")
+            
+            # Registra erro no service map
+            if SERVICE_MAP_AVAILABLE:
+                try:
+                    duration = time.time() - start_time
+                    record_service_call(
+                        source_service="produto-api",
+                        target_service="postgresql",
+                        method="query",
+                        duration=duration,
+                        status_code=500,
+                        error_type="unexpected_error"
+                    )
+                except:
+                    pass
             raise
         finally:
             session.close()

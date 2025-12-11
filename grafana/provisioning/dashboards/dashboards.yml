@@ -1,0 +1,14 @@
+apiVersion: 1
+
+providers:
+  - name: 'Service Map Dashboards'
+    orgId: 1
+    folder: 'Monitoring'
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: true
+

@@ -14,6 +14,7 @@ try:
         http_request_duration,
         http_errors_total,
     )
+    from internal.infra.metrics.service_map import record_service_call
     METRICS_AVAILABLE = True
 except ImportError:
     METRICS_AVAILABLE = False
@@ -73,6 +74,30 @@ class LoggerMiddleware(BaseHTTPMiddleware):
                         endpoint=endpoint,
                         status_code=str(status_code)
                     ).inc()
+                
+                # Registra no service map (requisição externa para a API)
+                # Assumindo que a requisição vem de um cliente externo
+                try:
+                    client_name = request.headers.get("User-Agent", "unknown-client")
+                    # Simplifica o nome do cliente
+                    if "grafana" in client_name.lower():
+                        client_name = "grafana"
+                    elif "prometheus" in client_name.lower():
+                        client_name = "prometheus"
+                    else:
+                        client_name = "external-client"
+                    
+                    record_service_call(
+                        source_service=client_name,
+                        target_service="produto-api",
+                        method=method,
+                        duration=process_time,
+                        status_code=status_code,
+                        error_type=None if status_code < 400 else f"http_{status_code}"
+                    )
+                except Exception as e:
+                    # Não falha se service map não estiver disponível
+                    pass
         
         # Log da resposta
         logger.info(
