@@ -1,4 +1,5 @@
 import logging
+from typing import Generator
 from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.orm import Session
 
