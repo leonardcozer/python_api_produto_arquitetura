@@ -381,14 +381,17 @@ def configure_logging(
         except Exception as e:
             logger = logging.getLogger(__name__)
             logger.error(f"❌ Erro ao configurar Loki handler: {str(e)} | Tipo: {type(e).__name__}")
+            loki_connected = False
+            _loki_handler_instance = None
     else:
         logger = logging.getLogger(__name__)
         if not loki_enabled:
             logger.info("ℹ️ Loki desabilitado")
         else:
-                logger.warning("⚠️ Loki não configurado (URL ou JOB não fornecidos)")
-        
-        return loki_connected, _loki_handler_instance
+            logger.warning("⚠️ Loki não configurado (URL ou JOB não fornecidos)")
+    
+    # Sempre retorna uma tupla
+    return loki_connected, _loki_handler_instance
 
 
 def shutdown_loki_handler(timeout: float = 10.0):
