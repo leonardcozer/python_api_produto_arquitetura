@@ -26,11 +26,11 @@ from pkg.apperrors.exception_handlers import register_exception_handlers
 METRICS_AVAILABLE = False
 try:
     from internal.infra.metrics.prometheus import setup_metrics, get_metrics, get_metrics_content_type
-from internal.infra.metrics.service_map import (
-    set_service_dependency,
-    set_service_health,
-    record_service_call
-)
+    from internal.infra.metrics.service_map import (
+        set_service_dependency,
+        set_service_health,
+        record_service_call
+    )
     METRICS_AVAILABLE = True
 except ImportError as e:
     # Log será feito depois que o logger estiver configurado
@@ -42,6 +42,12 @@ except ImportError as e:
         return b"# Metrics not available - prometheus_client not installed\n"
     def get_metrics_content_type():
         return "text/plain"
+    def set_service_dependency(*args, **kwargs):
+        pass
+    def set_service_health(*args, **kwargs):
+        pass
+    def record_service_call(*args, **kwargs):
+        pass
 except Exception as e:
     _metrics_import_error = str(e)
     def setup_metrics(*args, **kwargs):
@@ -50,6 +56,12 @@ except Exception as e:
         return b"# Metrics not available\n"
     def get_metrics_content_type():
         return "text/plain"
+    def set_service_dependency(*args, **kwargs):
+        pass
+    def set_service_health(*args, **kwargs):
+        pass
+    def record_service_call(*args, **kwargs):
+        pass
 
 # Configura logging com suporte ao Loki
 loki_connected, loki_handler = configure_logging(
