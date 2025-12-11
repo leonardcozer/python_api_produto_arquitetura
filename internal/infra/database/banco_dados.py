@@ -1,7 +1,10 @@
 import logging
-from sqlalchemy import create_engine
+from contextlib import contextmanager
+from typing import Generator
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import QueuePool
+from sqlalchemy.exc import SQLAlchemyError
 
 from config.config import settings
 
@@ -23,6 +26,10 @@ class Database:
                 max_overflow=settings.database.max_overflow,
                 echo=settings.debug,
                 pool_pre_ping=True,  # Verifica se a conexão está viva antes de usar
+                pool_recycle=3600,  # Recicla conexões após 1 hora
+                connect_args={
+                    "connect_timeout": 10,  # Timeout de conexão de 10 segundos
+                }
             )
             self.SessionLocal = sessionmaker(
                 autocommit=False,
@@ -34,11 +41,75 @@ class Database:
             logger.error(f"Failed to initialize database: {str(e)}")
             raise
 
-    def get_session(self) -> Session:
-        """Retorna uma nova sessão do banco de dados"""
+    @contextmanager
+    def get_session(self) -> Generator[Session, None, None]:
+        """
+        Context manager para obter uma sessão do banco de dados.
+        Garante que a sessão seja fechada mesmo em caso de exceção.
+        
+        Usage:
+            with db.get_session() as session:
+                # usar session
+        """
         if self.SessionLocal is None:
             self.init()
-        return self.SessionLocal()
+        
+        session = self.SessionLocal()
+        try:
+            yield session
+            session.commit()
+        except SQLAlchemyError as e:
+            session.rollback()
+            logger.error(f"Database error: {str(e)}")
+            raise
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Unexpected error in database session: {str(e)}")
+            raise
+        finally:
+            session.close()
+
+    def check_connection(self) -> bool:
+        """
+        Verifica se a conexão com o banco de dados está funcionando
+        
+        Returns:
+            bool: True se a conexão está OK, False caso contrário
+        """
+        try:
+            if self.engine is None:
+                return False
+            with self.engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            return True
+        except Exception as e:
+            logger.error(f"Database connection check failed: {str(e)}")
+            return False
+
+    def get_pool_status(self) -> dict:
+        """
+        Retorna o status do pool de conexões
+        
+        Returns:
+            dict: Status do pool (size, checked_in, checked_out, overflow, invalid)
+        """
+        if self.engine is None:
+            return {
+                "pool_size": 0,
+                "checked_in": 0,
+                "checked_out": 0,
+                "overflow": 0,
+                "invalid": 0
+            }
+        
+        pool = self.engine.pool
+        return {
+            "pool_size": pool.size(),
+            "checked_in": pool.checkedin(),
+            "checked_out": pool.checkedout(),
+            "overflow": pool.overflow(),
+            "invalid": pool.invalid()
+        }
 
     def close(self):
         """Fecha a conexão com o banco de dados"""

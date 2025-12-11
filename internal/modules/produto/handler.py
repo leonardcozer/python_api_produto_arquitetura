@@ -7,17 +7,23 @@ from internal.modules.produto.service import ProdutoService
 from internal.modules.produto.repository import ProdutoRepository
 from internal.infra.database.banco_dados import db
 from pkg.apperrors.exceptions import NotFoundError, BadRequestError
+from pkg.utils.input_validators import (
+    sanitize_search_term,
+    sanitize_category,
+    validate_page_params,
+    validate_id
+)
 
 logger = logging.getLogger("api")
 
 
-def get_db() -> Session:
-    """Dependency para obter uma sessão do banco de dados"""
-    session = db.get_session()
-    try:
+def get_db() -> Generator[Session, None, None]:
+    """
+    Dependency para obter uma sessão do banco de dados.
+    Usa context manager para garantir fechamento adequado da sessão.
+    """
+    with db.get_session() as session:
         yield session
-    finally:
-        session.close()
 
 
 def get_produto_service(db: Session = Depends(get_db)) -> ProdutoService:
@@ -76,14 +82,9 @@ async def obter_produto(
     service: ProdutoService = Depends(get_produto_service)
 ):
     """Obtém um produto específico pelo ID"""
-    try:
-        return service.obter_produto(produto_id)
-    except NotFoundError as e:
-        logger.warning(f"Produto não encontrado: {produto_id}")
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        logger.error(f"Erro ao obter produto: {str(e)}")
-        raise HTTPException(status_code=500, detail="Erro interno do servidor")
+    # Valida o ID antes de processar
+    validate_id(produto_id, "ID do produto")
+    return service.obter_produto(produto_id)
 
 
 @router.get(
@@ -106,14 +107,9 @@ async def listar_produtos(
     - **page**: Número da página (padrão: 1)
     - **page_size**: Quantidade de itens por página (padrão: 10, máximo: 100)
     """
-    try:
-        return service.listar_produtos(page=page, page_size=page_size)
-    except BadRequestError as e:
-        logger.warning(f"Erro de validação ao listar: {str(e)}")
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"Erro ao listar produtos: {str(e)}")
-        raise HTTPException(status_code=500, detail="Erro interno do servidor")
+    # Valida parâmetros de paginação
+    page, page_size = validate_page_params(page, page_size)
+    return service.listar_produtos(page=page, page_size=page_size)
 
 
 @router.get(
@@ -138,14 +134,11 @@ async def listar_por_categoria(
     - **page**: Número da página (padrão: 1)
     - **page_size**: Quantidade de itens por página (padrão: 10, máximo: 100)
     """
-    try:
-        return service.listar_por_categoria(categoria, page=page, page_size=page_size)
-    except BadRequestError as e:
-        logger.warning(f"Erro de validação ao listar por categoria: {str(e)}")
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"Erro ao listar por categoria: {str(e)}")
-        raise HTTPException(status_code=500, detail="Erro interno do servidor")
+    # Sanitiza e valida categoria
+    categoria = sanitize_category(categoria)
+    # Valida parâmetros de paginação
+    page, page_size = validate_page_params(page, page_size)
+    return service.listar_por_categoria(categoria, page=page, page_size=page_size)
 
 
 @router.get(
@@ -170,14 +163,11 @@ async def buscar_produtos(
     - **page**: Número da página (padrão: 1)
     - **page_size**: Quantidade de itens por página (padrão: 10, máximo: 100)
     """
-    try:
-        return service.buscar_produtos(termo, page=page, page_size=page_size)
-    except BadRequestError as e:
-        logger.warning(f"Erro de validação na busca: {str(e)}")
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"Erro ao buscar produtos: {str(e)}")
-        raise HTTPException(status_code=500, detail="Erro interno do servidor")
+    # Sanitiza o termo de busca (previne SQL injection)
+    termo = sanitize_search_term(termo)
+    # Valida parâmetros de paginação
+    page, page_size = validate_page_params(page, page_size)
+    return service.buscar_produtos(termo, page=page, page_size=page_size)
 
 
 @router.put(
@@ -201,17 +191,9 @@ async def atualizar_produto(
     - **produto_id**: ID do produto a atualizar
     - Todos os campos são opcionais
     """
-    try:
-        return service.atualizar_produto(produto_id, produto_request)
-    except NotFoundError as e:
-        logger.warning(f"Produto não encontrado para atualização: {produto_id}")
-        raise HTTPException(status_code=404, detail=str(e))
-    except BadRequestError as e:
-        logger.warning(f"Erro de validação ao atualizar: {str(e)}")
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"Erro ao atualizar produto: {str(e)}")
-        raise HTTPException(status_code=500, detail="Erro interno do servidor")
+    # Valida o ID antes de processar
+    validate_id(produto_id, "ID do produto")
+    return service.atualizar_produto(produto_id, produto_request)
 
 
 @router.delete(
@@ -228,12 +210,7 @@ async def deletar_produto(
     service: ProdutoService = Depends(get_produto_service)
 ):
     """Deleta um produto específico"""
-    try:
-        service.deletar_produto(produto_id)
-        return None
-    except NotFoundError as e:
-        logger.warning(f"Produto não encontrado para deleção: {produto_id}")
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        logger.error(f"Erro ao deletar produto: {str(e)}")
-        raise HTTPException(status_code=500, detail="Erro interno do servidor")
+    # Valida o ID antes de processar
+    validate_id(produto_id, "ID do produto")
+    service.deletar_produto(produto_id)
+    return None

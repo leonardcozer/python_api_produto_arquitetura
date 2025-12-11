@@ -37,6 +37,8 @@ class LokiHandler(logging.Handler):
         self.log_queue = Queue()
         self.batch = []
         self.last_send = time.time()
+        self._shutdown = False
+        self._shutdown_event = None
         
         # Logger para informações sobre envio (sem loop infinito)
         self.sender_logger = logging.getLogger("loki_sender")
@@ -46,8 +48,8 @@ class LokiHandler(logging.Handler):
         self.sender_logger.addHandler(console_handler)
         self.sender_logger.setLevel(logging.INFO)
         
-        # Thread para processar batch de logs
-        self.worker_thread = Thread(target=self._process_batch, daemon=True)
+        # Thread para processar batch de logs (não é daemon para permitir graceful shutdown)
+        self.worker_thread = Thread(target=self._process_batch, daemon=False)
         self.worker_thread.start()
         
     def _format_log_entry(self, record: logging.LogRecord) -> dict:
@@ -122,14 +124,14 @@ class LokiHandler(logging.Handler):
         except ImportError:
             METRICS_AVAILABLE = False
         
-        while True:
+        while not self._shutdown:
             try:
                 # Coleta logs do queue
                 entries = []
                 start_time = time.time()
                 
                 # Espera até ter batch_size logs ou timeout de 5 segundos
-                while len(entries) < self.batch_size and (time.time() - start_time) < 5:
+                while len(entries) < self.batch_size and (time.time() - start_time) < 5 and not self._shutdown:
                     try:
                         entry = self.log_queue.get(timeout=1)
                         entries.append(entry)
@@ -166,10 +168,71 @@ class LokiHandler(logging.Handler):
                         # Coleta métricas de falhas
                         if METRICS_AVAILABLE:
                             loki_logs_failed_total.inc(len(entries))
+                
+                # Se está em shutdown e não há mais logs, sai do loop
+                if self._shutdown and self.log_queue.empty():
+                    break
                         
             except Exception as e:
-                self.sender_logger.error(f"❌ Erro no processamento de batch: {str(e)}")
-                time.sleep(1)
+                if not self._shutdown:
+                    self.sender_logger.error(f"❌ Erro no processamento de batch: {str(e)}")
+                    time.sleep(1)
+        
+        # Envia logs restantes antes de encerrar
+        self._flush_remaining_logs(METRICS_AVAILABLE)
+        self.sender_logger.info(f"🛑 Loki handler encerrado. Total enviados: {self.logs_sent}, Falhas: {self.logs_failed}")
+    
+    def _flush_remaining_logs(self, metrics_available: bool = False):
+        """Envia logs restantes na queue antes de encerrar"""
+        remaining_entries = []
+        try:
+            # Coleta todos os logs restantes da queue
+            while not self.log_queue.empty():
+                try:
+                    entry = self.log_queue.get_nowait()
+                    remaining_entries.append(entry)
+                except:
+                    break
+            
+            # Envia em batch
+            if remaining_entries:
+                self.sender_logger.info(f"📤 Enviando {len(remaining_entries)} logs restantes antes do shutdown...")
+                if self._send_to_loki(remaining_entries):
+                    self.logs_sent += len(remaining_entries)
+                    if metrics_available:
+                        for entry in remaining_entries:
+                            level = entry.get('_record_level', 'unknown')
+                            logger_name = entry.get('_record_logger', 'unknown')
+                            try:
+                                from internal.infra.metrics.prometheus import loki_logs_sent_total
+                                loki_logs_sent_total.labels(level=level, logger=logger_name).inc()
+                            except:
+                                pass
+                else:
+                    self.logs_failed += len(remaining_entries)
+        except Exception as e:
+            self.sender_logger.error(f"❌ Erro ao fazer flush de logs: {str(e)}")
+    
+    def shutdown(self, timeout: float = 10.0):
+        """
+        Encerra o handler de forma graciosa, aguardando processamento de logs pendentes
+        
+        Args:
+            timeout: Tempo máximo (em segundos) para aguardar o processamento
+        """
+        if self._shutdown:
+            return
+        
+        self.sender_logger.info("🛑 Iniciando graceful shutdown do Loki handler...")
+        self._shutdown = True
+        
+        # Aguarda a thread terminar ou timeout
+        self.worker_thread.join(timeout=timeout)
+        
+        if self.worker_thread.is_alive():
+            self.sender_logger.warning(f"⚠️ Thread do Loki não terminou em {timeout}s, forçando encerramento")
+        else:
+            self.sender_logger.info("✅ Loki handler encerrado com sucesso")
     
     def emit(self, record: logging.LogRecord):
         """Adiciona o log ao queue para envio"""
@@ -186,12 +249,16 @@ class LokiHandler(logging.Handler):
             self.sender_logger.error(f"❌ Erro ao adicionar log ao queue: {str(e)}")
 
 
+# Armazena referência global do handler do Loki para graceful shutdown
+_loki_handler_instance: Optional[LokiHandler] = None
+
+
 def configure_logging(
     log_level: str = "INFO",
     loki_url: Optional[str] = None,
     loki_job: Optional[str] = None,
     loki_enabled: bool = True
-) -> bool:
+) -> tuple[bool, Optional[LokiHandler]]:
     """
     Configura o sistema de logging da aplicação com suporte ao Loki
     
@@ -202,8 +269,9 @@ def configure_logging(
         loki_enabled: Se True, habilita o envio de logs para o Loki
     
     Returns:
-        bool: True se o Loki foi configurado com sucesso, False caso contrário
+        tuple: (bool, Optional[LokiHandler]) - (True se configurado, instância do handler)
     """
+    global _loki_handler_instance
     # Remove handlers existentes para evitar duplicação
     root_logger = logging.getLogger()
     for handler in root_logger.handlers[:]:
@@ -245,6 +313,9 @@ def configure_logging(
             loki_handler.setFormatter(loki_formatter)
             
             root_logger.addHandler(loki_handler)
+            
+            # Armazena referência global para graceful shutdown
+            _loki_handler_instance = loki_handler
             
             # Log inicial sobre configuração do Loki
             logger = logging.getLogger(__name__)
@@ -315,6 +386,19 @@ def configure_logging(
         if not loki_enabled:
             logger.info("ℹ️ Loki desabilitado")
         else:
-            logger.warning("⚠️ Loki não configurado (URL ou JOB não fornecidos)")
+                logger.warning("⚠️ Loki não configurado (URL ou JOB não fornecidos)")
+        
+        return loki_connected, _loki_handler_instance
+
+
+def shutdown_loki_handler(timeout: float = 10.0):
+    """
+    Encerra o handler do Loki de forma graciosa
     
-    return loki_connected
+    Args:
+        timeout: Tempo máximo para aguardar processamento
+    """
+    global _loki_handler_instance
+    if _loki_handler_instance:
+        _loki_handler_instance.shutdown(timeout=timeout)
+        _loki_handler_instance = None

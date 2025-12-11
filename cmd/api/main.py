@@ -18,8 +18,9 @@ from config.config import settings
 from internal.infra.database.banco_dados import db
 from internal.infra.http.server import create_server
 from internal.infra.http.middlewares import configure_middlewares, configure_cors
-from internal.infra.logger.zap import LOGGER_MAIN, configure_logging
+from internal.infra.logger.zap import LOGGER_MAIN, configure_logging, shutdown_loki_handler
 from internal.modules.produto.routes import router as produto_router
+from pkg.apperrors.exception_handlers import register_exception_handlers
 
 # Importa métricas do Prometheus (com tratamento de erro)
 METRICS_AVAILABLE = False
@@ -46,7 +47,7 @@ except Exception as e:
         return "text/plain"
 
 # Configura logging com suporte ao Loki
-loki_connected = configure_logging(
+loki_connected, loki_handler = configure_logging(
     log_level=settings.server.log_level,
     loki_url=settings.loki.url if settings.loki.enabled else None,
     loki_job=settings.loki.job if settings.loki.enabled else None,
@@ -101,7 +102,22 @@ async def lifespan(app: FastAPI):
 
     # Limpeza (shutdown)
     logger.info("🛑 Encerrando aplicação...")
-    db.close()
+    
+    # Graceful shutdown do Loki handler
+    if loki_connected:
+        try:
+            shutdown_loki_handler(timeout=10.0)
+            logger.info("✅ Loki handler encerrado com sucesso")
+        except Exception as e:
+            logger.error(f"❌ Erro ao encerrar Loki handler: {str(e)}")
+    
+    # Fecha conexão com banco de dados
+    try:
+        db.close()
+        logger.info("✅ Conexão com banco de dados fechada")
+    except Exception as e:
+        logger.error(f"❌ Erro ao fechar banco de dados: {str(e)}")
+    
     logger.info("✅ Aplicação encerrada com sucesso")
 
 
@@ -111,6 +127,9 @@ def create_app() -> FastAPI:
     # Cria a instância do FastAPI
     app = create_server()
     app.router.lifespan_context = lifespan
+    
+    # Registra exception handlers globais (deve ser antes das rotas)
+    register_exception_handlers(app)
     
     # Configura CORS
     configure_cors(app, settings.cors)
@@ -162,20 +181,79 @@ def create_app() -> FastAPI:
     routes_list = [route.path for route in app.routes if hasattr(route, 'path')]
     logger.info(f"✅ Rotas registradas: {routes_list}")
     
-    # Rota de health check
+    # Rota de health check (liveness probe)
     @app.get(
         "/health",
         tags=["Health"],
         summary="Health Check",
-        description="Verifica se a aplicação está rodando"
+        description="Verifica se a aplicação está rodando (liveness probe)"
     )
     async def health_check():
-        """Endpoint para verificar se a aplicação está saudável"""
+        """Endpoint para verificar se a aplicação está viva"""
         return {
             "status": "healthy",
+            "service": "produto-api",
             "environment": settings.environment,
             "version": "1.0.0"
         }
+    
+    # Rota de readiness probe
+    @app.get(
+        "/ready",
+        tags=["Health"],
+        summary="Readiness Check",
+        description="Verifica se a aplicação está pronta para receber requisições"
+    )
+    async def readiness_check():
+        """
+        Endpoint para verificar se a aplicação está pronta.
+        Verifica conexão com banco de dados e outras dependências críticas.
+        """
+        checks = {
+            "database": False,
+            "loki": False,
+            "status": "unhealthy"
+        }
+        
+        # Verifica conexão com banco de dados
+        try:
+            checks["database"] = db.check_connection()
+        except Exception as e:
+            logger.error(f"Database health check failed: {str(e)}")
+            checks["database"] = False
+        
+        # Verifica status do Loki (se habilitado)
+        if loki_connected:
+            checks["loki"] = True  # Simplificado - poderia verificar conexão real
+        else:
+            checks["loki"] = True  # Não é crítico se desabilitado
+        
+        # Determina status geral
+        if checks["database"]:
+            checks["status"] = "ready"
+            status_code = 200
+        else:
+            checks["status"] = "not_ready"
+            status_code = 503
+        
+        # Adiciona informações do pool
+        try:
+            pool_status = db.get_pool_status()
+            checks["database_pool"] = pool_status
+        except Exception:
+            pass
+        
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=status_code,
+            content={
+                "status": checks["status"],
+                "checks": checks,
+                "service": "produto-api",
+                "environment": settings.environment,
+                "version": "1.0.0"
+            }
+        )
     
     # Rota raiz
     @app.get(

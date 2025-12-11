@@ -55,10 +55,16 @@ class ProdutoRepository:
         return produtos, total
 
     def search(self, termo: str, skip: int = 0, limit: int = 10) -> tuple[list[Produto], int]:
-        """Busca produtos por nome ou descrição"""
+        """
+        Busca produtos por nome ou descrição.
+        O termo já deve estar sanitizado antes de chegar aqui.
+        """
+        # Usa bind parameter para prevenir SQL injection
+        # O termo já foi sanitizado no handler/service
+        search_pattern = f"%{termo}%"
         query = self.db.query(Produto).filter(
-            (Produto.nome.ilike(f"%{termo}%")) |
-            (Produto.descricao.ilike(f"%{termo}%"))
+            (Produto.nome.ilike(search_pattern)) |
+            (Produto.descricao.ilike(search_pattern))
         )
         total = query.count()
         produtos = query.offset(skip).limit(limit).all()
